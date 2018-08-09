@@ -9,6 +9,7 @@ import android.support.annotation.Nullable;
 import android.support.v4.app.NotificationCompat;
 import android.text.SpannableStringBuilder;
 import android.text.TextUtils;
+import android.util.Log;
 
 import org.thoughtcrime.securesms.R;
 import org.thoughtcrime.securesms.database.RecipientDatabase;
@@ -18,6 +19,9 @@ import org.thoughtcrime.securesms.util.TextSecurePreferences;
 import org.thoughtcrime.securesms.util.Util;
 
 public abstract class AbstractNotificationBuilder extends NotificationCompat.Builder {
+
+  @SuppressWarnings("unused")
+  private static final String TAG = AbstractNotificationBuilder.class.getSimpleName();
 
   protected Context                       context;
   protected NotificationPrivacyPreference privacy;
@@ -41,11 +45,11 @@ public abstract class AbstractNotificationBuilder extends NotificationCompat.Bui
   }
 
   public void setAlarms(@Nullable Uri ringtone, RecipientDatabase.VibrateState vibrate) {
-    String  defaultRingtoneName = TextSecurePreferences.getNotificationRingtone(context);
-    boolean defaultVibrate      = TextSecurePreferences.isNotificationVibrateEnabled(context);
+    Uri     defaultRingtone = TextSecurePreferences.getNotificationRingtone(context);
+    boolean defaultVibrate  = TextSecurePreferences.isNotificationVibrateEnabled(context);
 
-    if      (ringtone == null && !TextUtils.isEmpty(defaultRingtoneName)) setSound(Uri.parse(defaultRingtoneName));
-    else if (ringtone != null && !ringtone.toString().isEmpty())          setSound(ringtone);
+    if      (ringtone == null && !TextUtils.isEmpty(defaultRingtone.toString())) setSound(defaultRingtone);
+    else if (ringtone != null && !ringtone.toString().isEmpty())                 setSound(ringtone);
 
     if (vibrate == RecipientDatabase.VibrateState.ENABLED ||
         (vibrate == RecipientDatabase.VibrateState.DEFAULT && defaultVibrate))

@@ -12,15 +12,14 @@ import org.thoughtcrime.securesms.ApplicationContext;
 import org.thoughtcrime.securesms.R;
 import org.thoughtcrime.securesms.dependencies.InjectableType;
 import org.thoughtcrime.securesms.gcm.GcmBroadcastReceiver;
+import org.thoughtcrime.securesms.jobmanager.requirements.NetworkRequirement;
+import org.thoughtcrime.securesms.jobmanager.requirements.NetworkRequirementProvider;
+import org.thoughtcrime.securesms.jobmanager.requirements.RequirementListener;
 import org.thoughtcrime.securesms.jobs.PushContentReceiveJob;
 import org.thoughtcrime.securesms.util.TextSecurePreferences;
-import org.whispersystems.jobqueue.requirements.NetworkRequirement;
-import org.whispersystems.jobqueue.requirements.NetworkRequirementProvider;
-import org.whispersystems.jobqueue.requirements.RequirementListener;
 import org.whispersystems.libsignal.InvalidVersionException;
 import org.whispersystems.signalservice.api.SignalServiceMessagePipe;
 import org.whispersystems.signalservice.api.SignalServiceMessageReceiver;
-import org.whispersystems.signalservice.api.messages.SignalServiceEnvelope;
 
 import java.util.LinkedList;
 import java.util.List;
@@ -209,16 +208,13 @@ public class MessageRetrievalService extends Service implements InjectableType, 
             try {
               Log.w(TAG, "Reading message...");
               localPipe.read(REQUEST_TIMEOUT_MINUTES, TimeUnit.MINUTES,
-                             new SignalServiceMessagePipe.MessagePipeCallback() {
-                               @Override
-                               public void onMessage(SignalServiceEnvelope envelope) {
-                                 Log.w(TAG, "Retrieved envelope! " + envelope.getSource());
+                             envelope -> {
+                               Log.w(TAG, "Retrieved envelope! " + envelope.getSource());
 
-                                 PushContentReceiveJob receiveJob = new PushContentReceiveJob(MessageRetrievalService.this);
-                                 receiveJob.handle(envelope);
+                               PushContentReceiveJob receiveJob = new PushContentReceiveJob(MessageRetrievalService.this);
+                               receiveJob.handle(envelope);
 
-                                 decrementPushReceived();
-                               }
+                               decrementPushReceived();
                              });
             } catch (TimeoutException e) {
               Log.w(TAG, "Application level read timeout...");

@@ -1,4 +1,4 @@
-/**
+/*
  * Copyright (C) 2012 Moxie Marlinspike
  *
  * This program is free software: you can redistribute it and/or modify
@@ -17,6 +17,7 @@
 package org.thoughtcrime.securesms.database.model;
 
 import android.content.Context;
+import android.support.annotation.NonNull;
 import android.text.SpannableString;
 
 import org.thoughtcrime.securesms.database.MmsSmsColumns;
@@ -40,14 +41,14 @@ public abstract class DisplayRecord {
   private final long       dateSent;
   private final long       dateReceived;
   private final long       threadId;
-  private final Body       body;
+  private final String     body;
   private final int        deliveryStatus;
   private final int        deliveryReceiptCount;
   private final int        readReceiptCount;
 
-  public DisplayRecord(Context context, Body body, Recipient recipient, long dateSent,
-                       long dateReceived, long threadId, int deliveryStatus, int deliveryReceiptCount,
-                       long type, int readReceiptCount)
+  DisplayRecord(Context context, String body, Recipient recipient, long dateSent,
+                long dateReceived, long threadId, int deliveryStatus, int deliveryReceiptCount,
+                long type, int readReceiptCount)
   {
     this.context              = context.getApplicationContext();
     this.threadId             = threadId;
@@ -61,8 +62,8 @@ public abstract class DisplayRecord {
     this.deliveryStatus       = deliveryStatus;
   }
 
-  public Body getBody() {
-    return body;
+  public @NonNull String getBody() {
+    return body == null ? "" : body;
   }
 
   public boolean isFailed() {
@@ -144,6 +145,10 @@ public abstract class DisplayRecord {
     return SmsDatabase.Types.isMissedCall(type);
   }
 
+  public boolean isVerificationStatusChange() {
+    return SmsDatabase.Types.isIdentityDefault(type) || SmsDatabase.Types.isIdentityVerified(type);
+  }
+
   public int getDeliveryStatus() {
     return deliveryStatus;
   }
@@ -167,23 +172,5 @@ public abstract class DisplayRecord {
 
   public boolean isPendingInsecureSmsFallback() {
     return SmsDatabase.Types.isPendingInsecureSmsFallbackType(type);
-  }
-
-  public static class Body {
-    private final String body;
-    private final boolean plaintext;
-
-    public Body(String body, boolean plaintext) {
-      this.body      = body;
-      this.plaintext = plaintext;
-    }
-
-    public boolean isPlaintext() {
-      return plaintext;
-    }
-
-    public String getBody() {
-      return body == null ? "" : body;
-    }
   }
 }

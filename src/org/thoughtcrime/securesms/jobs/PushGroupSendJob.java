@@ -9,15 +9,16 @@ import com.annimon.stream.Stream;
 
 import org.thoughtcrime.securesms.ApplicationContext;
 import org.thoughtcrime.securesms.attachments.Attachment;
-import org.thoughtcrime.securesms.crypto.MasterSecret;
 import org.thoughtcrime.securesms.database.Address;
 import org.thoughtcrime.securesms.database.DatabaseFactory;
-import org.thoughtcrime.securesms.database.GroupReceiptDatabase;
 import org.thoughtcrime.securesms.database.GroupReceiptDatabase.GroupReceiptInfo;
 import org.thoughtcrime.securesms.database.MmsDatabase;
 import org.thoughtcrime.securesms.database.NoSuchMessageException;
 import org.thoughtcrime.securesms.database.documents.NetworkFailure;
 import org.thoughtcrime.securesms.dependencies.InjectableType;
+import org.thoughtcrime.securesms.jobmanager.JobParameters;
+import org.thoughtcrime.securesms.jobmanager.requirements.NetworkBackoffRequirement;
+import org.thoughtcrime.securesms.jobmanager.requirements.NetworkRequirement;
 import org.thoughtcrime.securesms.jobs.requirements.MasterSecretRequirement;
 import org.thoughtcrime.securesms.mms.MediaConstraints;
 import org.thoughtcrime.securesms.mms.MmsException;
@@ -27,14 +28,14 @@ import org.thoughtcrime.securesms.recipients.Recipient;
 import org.thoughtcrime.securesms.recipients.RecipientFormattingException;
 import org.thoughtcrime.securesms.transport.UndeliverableMessageException;
 import org.thoughtcrime.securesms.util.GroupUtil;
-import org.whispersystems.jobqueue.JobParameters;
-import org.whispersystems.jobqueue.requirements.NetworkRequirement;
 import org.whispersystems.libsignal.util.guava.Optional;
 import org.whispersystems.signalservice.api.SignalServiceMessageSender;
 import org.whispersystems.signalservice.api.crypto.UntrustedIdentityException;
 import org.whispersystems.signalservice.api.messages.SignalServiceAttachment;
 import org.whispersystems.signalservice.api.messages.SignalServiceDataMessage;
+import org.whispersystems.signalservice.api.messages.SignalServiceDataMessage.Quote;
 import org.whispersystems.signalservice.api.messages.SignalServiceGroup;
+import org.whispersystems.signalservice.api.messages.shared.SharedContact;
 import org.whispersystems.signalservice.api.push.SignalServiceAddress;
 import org.whispersystems.signalservice.api.push.exceptions.EncapsulatedExceptions;
 import org.whispersystems.signalservice.api.push.exceptions.NetworkFailureException;
@@ -44,6 +45,7 @@ import org.whispersystems.signalservice.internal.push.SignalServiceProtos.GroupC
 import java.io.IOException;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 import javax.inject.Inject;
 
@@ -64,8 +66,8 @@ public class PushGroupSendJob extends PushSendJob implements InjectableType {
                                 .withPersistence()
                                 .withGroupId(destination.toGroupString())
                                 .withRequirement(new MasterSecretRequirement(context))
-                                .withRequirement(new NetworkRequirement(context))
-                                .withRetryCount(5)
+                                .withRequirement(new NetworkBackoffRequirement(context))
+                                .withRetryDuration(TimeUnit.DAYS.toMillis(1))
                                 .create());
 
     this.messageId         = messageId;
@@ -78,14 +80,14 @@ public class PushGroupSendJob extends PushSendJob implements InjectableType {
   }
 
   @Override
-  public void onPushSend(MasterSecret masterSecret)
+  public void onPushSend()
       throws MmsException, IOException, NoSuchMessageException
   {
     MmsDatabase          database = DatabaseFactory.getMmsDatabase(context);
-    OutgoingMediaMessage message  = database.getOutgoingMessage(masterSecret, messageId);
+    OutgoingMediaMessage message  = database.getOutgoingMessage(messageId);
 
     try {
-      deliver(masterSecret, message, filterAddress == null ? null : Address.fromSerialized(filterAddress));
+      deliver(message, filterAddress == null ? null : Address.fromSerialized(filterAddress));
 
       database.markAsSent(messageId, true);
       markAttachmentsUploaded(messageId, message.getAttachments());
@@ -117,6 +119,13 @@ public class PushGroupSendJob extends PushSendJob implements InjectableType {
       if (e.getNetworkExceptions().isEmpty() && e.getUntrustedIdentityExceptions().isEmpty()) {
         database.markAsSent(messageId, true);
         markAttachmentsUploaded(messageId, message.getAttachments());
+
+        if (message.getExpiresIn() > 0 && !message.isExpirationUpdate()) {
+          database.markExpireStarted(messageId);
+          ApplicationContext.getInstance(context)
+                            .getExpiringMessageManager()
+                            .scheduleDeletion(messageId, true, message.getExpiresIn());
+        }
       } else {
         database.markAsSentFailed(messageId);
         notifyMediaMessageDeliveryFailed(context, messageId);
@@ -135,7 +144,7 @@ public class PushGroupSendJob extends PushSendJob implements InjectableType {
     DatabaseFactory.getMmsDatabase(context).markAsSentFailed(messageId);
   }
 
-  private void deliver(MasterSecret masterSecret, OutgoingMediaMessage message, @Nullable Address filterAddress)
+  private void deliver(OutgoingMediaMessage message, @Nullable Address filterAddress)
       throws IOException, RecipientFormattingException, InvalidNumberException,
       EncapsulatedExceptions, UndeliverableMessageException
   {
@@ -143,8 +152,10 @@ public class PushGroupSendJob extends PushSendJob implements InjectableType {
     Optional<byte[]>              profileKey        = getProfileKey(message.getRecipient());
     List<Address>                 recipients        = getGroupMessageRecipients(groupId, messageId);
     MediaConstraints              mediaConstraints  = MediaConstraints.getPushMediaConstraints();
-    List<Attachment>              scaledAttachments = scaleAttachments(masterSecret, mediaConstraints, message.getAttachments());
-    List<SignalServiceAttachment> attachmentStreams = getAttachmentsFor(masterSecret, scaledAttachments);
+    List<Attachment>              scaledAttachments = scaleAndStripExifFromAttachments(mediaConstraints, message.getAttachments());
+    List<SignalServiceAttachment> attachmentStreams = getAttachmentsFor(scaledAttachments);
+    Optional<Quote>               quote             = getQuoteFor(message);
+    List<SharedContact>           sharedContacts    = getSharedContactsFor(message);
 
     List<SignalServiceAddress>    addresses;
 
@@ -159,6 +170,7 @@ public class PushGroupSendJob extends PushSendJob implements InjectableType {
       SignalServiceGroup        group            = new SignalServiceGroup(type, GroupUtil.getDecodedId(groupId), groupContext.getName(), groupContext.getMembersList(), avatar);
       SignalServiceDataMessage  groupDataMessage = SignalServiceDataMessage.newBuilder()
                                                                            .withTimestamp(message.getSentTimeMillis())
+                                                                           .withExpiration(message.getRecipient().getExpireMessages())
                                                                            .asGroupMessage(group)
                                                                            .build();
 
@@ -173,6 +185,8 @@ public class PushGroupSendJob extends PushSendJob implements InjectableType {
                                                                       .withExpiration((int)(message.getExpiresIn() / 1000))
                                                                       .asExpirationUpdate(message.isExpirationUpdate())
                                                                       .withProfileKey(profileKey.orNull())
+                                                                      .withQuote(quote.orNull())
+                                                                      .withSharedContacts(sharedContacts)
                                                                       .build();
 
       messageSender.sendMessage(addresses, groupMessage);

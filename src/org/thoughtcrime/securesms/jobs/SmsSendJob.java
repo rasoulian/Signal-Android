@@ -11,8 +11,8 @@ import android.util.Log;
 
 import org.thoughtcrime.securesms.crypto.MasterSecret;
 import org.thoughtcrime.securesms.database.DatabaseFactory;
-import org.thoughtcrime.securesms.database.EncryptingSmsDatabase;
 import org.thoughtcrime.securesms.database.NoSuchMessageException;
+import org.thoughtcrime.securesms.database.SmsDatabase;
 import org.thoughtcrime.securesms.database.model.SmsMessageRecord;
 import org.thoughtcrime.securesms.jobs.requirements.MasterSecretRequirement;
 import org.thoughtcrime.securesms.jobs.requirements.NetworkOrServiceRequirement;
@@ -23,13 +23,14 @@ import org.thoughtcrime.securesms.service.SmsDeliveryListener;
 import org.thoughtcrime.securesms.transport.UndeliverableMessageException;
 import org.thoughtcrime.securesms.util.NumberUtil;
 import org.thoughtcrime.securesms.util.TextSecurePreferences;
-import org.whispersystems.jobqueue.JobParameters;
+import org.thoughtcrime.securesms.jobmanager.JobParameters;
 
 import java.util.ArrayList;
 
 public class SmsSendJob extends SendJob {
 
-  private static final String TAG = SmsSendJob.class.getSimpleName();
+  private static final long   serialVersionUID = -5118520036244759718L;
+  private static final String TAG              = SmsSendJob.class.getSimpleName();
 
   private final long messageId;
 
@@ -43,8 +44,8 @@ public class SmsSendJob extends SendJob {
 
   @Override
   public void onSend(MasterSecret masterSecret) throws NoSuchMessageException {
-    EncryptingSmsDatabase database = DatabaseFactory.getEncryptingSmsDatabase(context);
-    SmsMessageRecord      record   = database.getMessage(masterSecret, messageId);
+    SmsDatabase      database = DatabaseFactory.getSmsDatabase(context);
+    SmsMessageRecord record   = database.getMessage(messageId);
 
     try {
       Log.w(TAG, "Sending message: " + messageId);
@@ -93,7 +94,7 @@ public class SmsSendJob extends SendJob {
       throw new UndeliverableMessageException("Not a valid SMS destination! " + recipient);
     }
 
-    ArrayList<String> messages                = SmsManager.getDefault().divideMessage(message.getBody().getBody());
+    ArrayList<String> messages                = SmsManager.getDefault().divideMessage(message.getBody());
     ArrayList<PendingIntent> sentIntents      = constructSentIntents(message.getId(), message.getType(), messages, false);
     ArrayList<PendingIntent> deliveredIntents = constructDeliveredIntents(message.getId(), message.getType(), messages);
 
@@ -118,6 +119,9 @@ public class SmsSendJob extends SendJob {
         Log.w(TAG, npe);
         throw new UndeliverableMessageException(npe2);
       }
+    } catch (SecurityException se) {
+      Log.w(TAG, se);
+      throw new UndeliverableMessageException(se);
     }
   }
 

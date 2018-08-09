@@ -1,7 +1,9 @@
 package org.thoughtcrime.securesms;
 
 
+import android.Manifest;
 import android.animation.Animator;
+import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
@@ -11,13 +13,13 @@ import android.os.AsyncTask;
 import android.os.Build;
 import android.os.Bundle;
 import android.provider.MediaStore;
+import android.support.annotation.NonNull;
 import android.support.annotation.Nullable;
 import android.support.annotation.RequiresApi;
 import android.text.Editable;
 import android.text.TextUtils;
 import android.text.TextWatcher;
 import android.util.Log;
-import android.util.Pair;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewAnimationUtils;
@@ -27,23 +29,28 @@ import android.widget.ImageView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import com.bumptech.glide.load.engine.DiskCacheStrategy;
 import com.dd.CircularProgressButton;
 import com.soundcloud.android.crop.Crop;
 
 import org.thoughtcrime.securesms.components.InputAwareLayout;
 import org.thoughtcrime.securesms.components.emoji.EmojiDrawer;
 import org.thoughtcrime.securesms.components.emoji.EmojiToggle;
-import org.thoughtcrime.securesms.contacts.avatars.ContactPhoto;
-import org.thoughtcrime.securesms.contacts.avatars.ContactPhotoFactory;
+import org.thoughtcrime.securesms.contacts.avatars.ResourceContactPhoto;
 import org.thoughtcrime.securesms.crypto.ProfileKeyUtil;
 import org.thoughtcrime.securesms.database.Address;
 import org.thoughtcrime.securesms.dependencies.InjectableType;
 import org.thoughtcrime.securesms.jobs.MultiDeviceProfileKeyUpdateJob;
+import org.thoughtcrime.securesms.mms.GlideApp;
+import org.thoughtcrime.securesms.permissions.Permissions;
 import org.thoughtcrime.securesms.profiles.AvatarHelper;
 import org.thoughtcrime.securesms.profiles.ProfileMediaConstraints;
 import org.thoughtcrime.securesms.profiles.SystemProfileUtil;
 import org.thoughtcrime.securesms.util.BitmapDecodingException;
 import org.thoughtcrime.securesms.util.BitmapUtil;
+import org.thoughtcrime.securesms.util.DynamicLanguage;
+import org.thoughtcrime.securesms.util.DynamicTheme;
+import org.thoughtcrime.securesms.util.FileProviderUtil;
 import org.thoughtcrime.securesms.util.IntentUtils;
 import org.thoughtcrime.securesms.util.TextSecurePreferences;
 import org.thoughtcrime.securesms.util.Util;
@@ -56,6 +63,7 @@ import org.whispersystems.signalservice.api.util.StreamDetails;
 import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.IOException;
+import java.security.SecureRandom;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
@@ -64,6 +72,7 @@ import javax.inject.Inject;
 
 import static android.provider.MediaStore.EXTRA_OUTPUT;
 
+@SuppressLint("StaticFieldLeak")
 public class CreateProfileActivity extends BaseActionBarActivity implements InjectableType {
 
   private static final String TAG = CreateProfileActivity.class.getSimpleName();
@@ -72,6 +81,9 @@ public class CreateProfileActivity extends BaseActionBarActivity implements Inje
   public static final String EXCLUDE_SYSTEM = "exclude_system";
 
   private static final int REQUEST_CODE_AVATAR = 1;
+
+  private final DynamicTheme    dynamicTheme    = new DynamicTheme();
+  private final DynamicLanguage dynamicLanguage = new DynamicLanguage();
 
   @Inject SignalServiceAccountManager accountManager;
 
@@ -91,6 +103,9 @@ public class CreateProfileActivity extends BaseActionBarActivity implements Inje
   public void onCreate(Bundle bundle) {
     super.onCreate(bundle);
 
+    dynamicTheme.onCreate(this);
+    dynamicLanguage.onCreate(this);
+
     setContentView(R.layout.profile_create_activity);
 
     getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
@@ -102,6 +117,13 @@ public class CreateProfileActivity extends BaseActionBarActivity implements Inje
     initializeProfileAvatar(getIntent().getBooleanExtra(EXCLUDE_SYSTEM, false));
 
     ApplicationContext.getInstance(this).injectDependencies(this);
+  }
+
+  @Override
+  public void onResume() {
+    super.onResume();
+    dynamicTheme.onResume(this);
+    dynamicLanguage.onResume(this);
   }
 
   @Override
@@ -120,6 +142,11 @@ public class CreateProfileActivity extends BaseActionBarActivity implements Inje
   }
 
   @Override
+  public void onRequestPermissionsResult(int requestCode, @NonNull String permissions[], @NonNull int[] grantResults) {
+    Permissions.onRequestPermissionsResult(this, requestCode, permissions, grantResults);
+  }
+
+  @Override
   public void onActivityResult(int requestCode, int resultCode, Intent data) {
     super.onActivityResult(requestCode, resultCode, data);
 
@@ -135,8 +162,7 @@ public class CreateProfileActivity extends BaseActionBarActivity implements Inje
 
           if (data != null && data.getBooleanExtra("delete", false)) {
             avatarBytes = null;
-            avatar.setImageDrawable(ContactPhotoFactory.getResourceContactPhoto(R.drawable.ic_camera_alt_white_24dp)
-                                                       .asDrawable(this, getResources().getColor(R.color.grey_400)));
+            avatar.setImageDrawable(new ResourceContactPhoto(R.drawable.ic_camera_alt_white_24dp).asDrawable(this, getResources().getColor(R.color.grey_400)));
           } else {
             new Crop(inputFile).output(outputFile).asSquare().start(this);
           }
@@ -145,13 +171,33 @@ public class CreateProfileActivity extends BaseActionBarActivity implements Inje
         break;
       case Crop.REQUEST_CROP:
         if (resultCode == Activity.RESULT_OK) {
-          try {
-            avatarBytes = BitmapUtil.createScaledBytes(this, Crop.getOutput(data), new ProfileMediaConstraints());
-            avatar.setImageDrawable(ContactPhotoFactory.getGroupContactPhoto(avatarBytes).asDrawable(this, 0));
-          } catch (BitmapDecodingException e) {
-            Log.w(TAG, e);
-            Toast.makeText(this, R.string.CreateProfileActivity_error_setting_profile_photo, Toast.LENGTH_LONG).show();
-          }
+          new AsyncTask<Void, Void, byte[]>() {
+            @Override
+            protected byte[] doInBackground(Void... params) {
+              try {
+                BitmapUtil.ScaleResult result = BitmapUtil.createScaledBytes(CreateProfileActivity.this, Crop.getOutput(data), new ProfileMediaConstraints());
+                return result.getBitmap();
+              } catch (BitmapDecodingException e) {
+                Log.w(TAG, e);
+                return null;
+              }
+            }
+
+            @Override
+            protected void onPostExecute(byte[] result) {
+              if (result != null) {
+                avatarBytes = result;
+                GlideApp.with(CreateProfileActivity.this)
+                        .load(avatarBytes)
+                        .skipMemoryCache(true)
+                        .diskCacheStrategy(DiskCacheStrategy.NONE)
+                        .circleCrop()
+                        .into(avatar);
+              } else {
+                Toast.makeText(CreateProfileActivity.this, R.string.CreateProfileActivity_error_setting_profile_photo, Toast.LENGTH_LONG).show();
+              }
+            }
+          }.execute();
         }
         break;
     }
@@ -170,20 +216,13 @@ public class CreateProfileActivity extends BaseActionBarActivity implements Inje
     this.reveal       = ViewUtil.findById(this, R.id.reveal);
     this.nextIntent   = getIntent().getParcelableExtra(NEXT_INTENT);
 
-    this.avatar.setImageDrawable(ContactPhotoFactory.getResourceContactPhoto(R.drawable.ic_camera_alt_white_24dp)
-                                                    .asDrawable(this, getResources().getColor(R.color.grey_400)));
+    this.avatar.setImageDrawable(new ResourceContactPhoto(R.drawable.ic_camera_alt_white_24dp).asDrawable(this, getResources().getColor(R.color.grey_400)));
 
-    this.avatar.setOnClickListener(view -> {
-      try {
-        captureFile  = File.createTempFile("capture", "jpg", getExternalCacheDir());
-      } catch (IOException e) {
-        Log.w(TAG, e);
-        captureFile = null;
-      }
-
-      Intent chooserIntent = createAvatarSelectionIntent(captureFile, avatarBytes != null);
-      startActivityForResult(chooserIntent, REQUEST_CODE_AVATAR);
-    });
+    this.avatar.setOnClickListener(view -> Permissions.with(this)
+                                                      .request(Manifest.permission.CAMERA, Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                                                      .ifNecessary()
+                                                      .onAnyResult(this::handleAvatarSelectionWithPermissions)
+                                                      .execute());
 
     this.name.addTextChangedListener(new TextWatcher() {
       @Override
@@ -251,12 +290,11 @@ public class CreateProfileActivity extends BaseActionBarActivity implements Inje
     Address ourAddress = Address.fromSerialized(TextSecurePreferences.getLocalNumber(this));
 
     if (AvatarHelper.getAvatarFile(this, ourAddress).exists() && AvatarHelper.getAvatarFile(this, ourAddress).length() > 0) {
-      new AsyncTask<Void, Void, Pair<byte[], ContactPhoto>>() {
+      new AsyncTask<Void, Void, byte[]>() {
         @Override
-        protected Pair<byte[], ContactPhoto> doInBackground(Void... params) {
+        protected byte[] doInBackground(Void... params) {
           try {
-            byte[] data =Util.readFully(AvatarHelper.getInputStreamFor(CreateProfileActivity.this, ourAddress));
-            return new Pair<>(data, ContactPhotoFactory.getSignalAvatarContactPhoto(CreateProfileActivity.this, ourAddress, null, getResources().getDimensionPixelSize(R.dimen.contact_photo_target_size)));
+            return Util.readFully(AvatarHelper.getInputStreamFor(CreateProfileActivity.this, ourAddress));
           } catch (IOException e) {
             Log.w(TAG, e);
             return null;
@@ -264,10 +302,13 @@ public class CreateProfileActivity extends BaseActionBarActivity implements Inje
         }
 
         @Override
-        protected void onPostExecute(Pair<byte[], ContactPhoto> result) {
+        protected void onPostExecute(byte[] result) {
           if (result != null) {
-            avatarBytes = result.first;
-            avatar.setImageDrawable(result.second.asDrawable(CreateProfileActivity.this, 0));
+            avatarBytes = result;
+            GlideApp.with(CreateProfileActivity.this)
+                    .load(result)
+                    .circleCrop()
+                    .into(avatar);
           }
         }
       }.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
@@ -277,7 +318,10 @@ public class CreateProfileActivity extends BaseActionBarActivity implements Inje
         public void onSuccess(byte[] result) {
           if (result != null) {
             avatarBytes = result;
-            avatar.setImageDrawable(ContactPhotoFactory.getGroupContactPhoto(result).asDrawable(CreateProfileActivity.this, 0));
+            GlideApp.with(CreateProfileActivity.this)
+                    .load(result)
+                    .circleCrop()
+                    .into(avatar);
           }
         }
 
@@ -320,7 +364,7 @@ public class CreateProfileActivity extends BaseActionBarActivity implements Inje
     this.name.setOnClickListener(v -> container.showSoftkey(name));
   }
 
-  private Intent createAvatarSelectionIntent(@Nullable File captureFile, boolean includeClear) {
+  private Intent createAvatarSelectionIntent(@Nullable File captureFile, boolean includeClear, boolean includeCamera) {
     List<Intent> extraIntents  = new LinkedList<>();
     Intent       galleryIntent = new Intent(Intent.ACTION_PICK, android.provider.MediaStore.Images.Media.INTERNAL_CONTENT_URI);
     galleryIntent.setType("image/*");
@@ -330,11 +374,13 @@ public class CreateProfileActivity extends BaseActionBarActivity implements Inje
       galleryIntent.setType("image/*");
     }
 
-    Intent cameraIntent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+    if (includeCamera) {
+      Intent cameraIntent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
 
-    if (captureFile != null && cameraIntent.resolveActivity(getPackageManager()) != null) {
-      cameraIntent.putExtra(EXTRA_OUTPUT, Uri.fromFile(captureFile));
-      extraIntents.add(cameraIntent);
+      if (captureFile != null && cameraIntent.resolveActivity(getPackageManager()) != null) {
+        cameraIntent.putExtra(EXTRA_OUTPUT, FileProviderUtil.getUriFor(this, captureFile));
+        extraIntents.add(cameraIntent);
+      }
     }
 
     if (includeClear) {
@@ -342,10 +388,29 @@ public class CreateProfileActivity extends BaseActionBarActivity implements Inje
     }
 
     Intent chooserIntent = Intent.createChooser(galleryIntent, getString(R.string.CreateProfileActivity_profile_photo));
-    chooserIntent.putExtra(Intent.EXTRA_INITIAL_INTENTS, extraIntents.toArray(new Intent[0]));
+
+    if (!extraIntents.isEmpty()) {
+      chooserIntent.putExtra(Intent.EXTRA_INITIAL_INTENTS, extraIntents.toArray(new Intent[0]));
+    }
 
 
     return chooserIntent;
+  }
+
+  private void handleAvatarSelectionWithPermissions() {
+    boolean hasCameraPermission = Permissions.hasAll(this, Manifest.permission.CAMERA);
+
+    if (hasCameraPermission) {
+      try {
+        captureFile = File.createTempFile("capture", "jpg", getExternalCacheDir());
+      } catch (IOException e) {
+        Log.w(TAG, e);
+        captureFile = null;
+      }
+    }
+
+    Intent chooserIntent = createAvatarSelectionIntent(captureFile, avatarBytes != null, hasCameraPermission);
+    startActivityForResult(chooserIntent, REQUEST_CODE_AVATAR);
   }
 
   private void handleUpload() {
@@ -376,6 +441,7 @@ public class CreateProfileActivity extends BaseActionBarActivity implements Inje
         try {
           accountManager.setProfileAvatar(profileKey, avatar);
           AvatarHelper.setAvatar(CreateProfileActivity.this, Address.fromSerialized(TextSecurePreferences.getLocalNumber(context)), avatarBytes);
+          TextSecurePreferences.setProfileAvatarId(CreateProfileActivity.this, new SecureRandom().nextInt());
         } catch (IOException e) {
           Log.w(TAG, e);
           return false;
@@ -443,6 +509,4 @@ public class CreateProfileActivity extends BaseActionBarActivity implements Inje
     reveal.setVisibility(View.VISIBLE);
     animation.start();
   }
-
-
 }

@@ -4,9 +4,11 @@ package org.thoughtcrime.securesms.database;
 import android.content.ContentValues;
 import android.content.Context;
 import android.database.Cursor;
-import android.database.sqlite.SQLiteDatabase;
-import android.database.sqlite.SQLiteOpenHelper;
 import android.support.annotation.NonNull;
+
+import net.sqlcipher.database.SQLiteDatabase;
+
+import org.thoughtcrime.securesms.database.helpers.SQLCipherOpenHelper;
 
 import java.util.LinkedList;
 import java.util.List;
@@ -16,7 +18,7 @@ public class GroupReceiptDatabase extends Database {
   public  static final String TABLE_NAME = "group_receipts";
 
   private static final String ID        = "_id";
-  private static final String MMS_ID    = "mms_id";
+  public  static final String MMS_ID    = "mms_id";
   private static final String ADDRESS   = "address";
   private static final String STATUS    = "status";
   private static final String TIMESTAMP = "timestamp";
@@ -33,7 +35,7 @@ public class GroupReceiptDatabase extends Database {
       "CREATE INDEX IF NOT EXISTS group_receipt_mms_id_index ON " + TABLE_NAME + " (" + MMS_ID + ");",
   };
 
-  public GroupReceiptDatabase(Context context, SQLiteOpenHelper databaseHelper) {
+  public GroupReceiptDatabase(Context context, SQLCipherOpenHelper databaseHelper) {
     super(context, databaseHelper);
   }
 

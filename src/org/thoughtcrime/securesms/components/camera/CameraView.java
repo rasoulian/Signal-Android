@@ -36,19 +36,19 @@ import android.util.Log;
 import android.view.OrientationEventListener;
 import android.view.ViewGroup;
 
+import org.thoughtcrime.securesms.ApplicationContext;
+import org.thoughtcrime.securesms.R;
+import org.thoughtcrime.securesms.jobmanager.Job;
+import org.thoughtcrime.securesms.jobmanager.JobParameters;
+import org.thoughtcrime.securesms.util.BitmapUtil;
+import org.thoughtcrime.securesms.util.TextSecurePreferences;
+import org.thoughtcrime.securesms.util.Util;
+import org.whispersystems.libsignal.util.guava.Optional;
+
 import java.io.IOException;
 import java.util.Collections;
 import java.util.LinkedList;
 import java.util.List;
-
-import org.thoughtcrime.securesms.ApplicationContext;
-import org.thoughtcrime.securesms.R;
-import org.thoughtcrime.securesms.util.BitmapUtil;
-import org.thoughtcrime.securesms.util.TextSecurePreferences;
-import org.thoughtcrime.securesms.util.Util;
-import org.whispersystems.jobqueue.Job;
-import org.whispersystems.jobqueue.JobParameters;
-import org.whispersystems.libsignal.util.guava.Optional;
 
 @SuppressWarnings("deprecation")
 public class CameraView extends ViewGroup {
@@ -370,7 +370,7 @@ public class CameraView extends ViewGroup {
     return outputOrientation;
   }
 
-  // https://github.com/WhisperSystems/Signal-Android/issues/4715
+  // https://github.com/signalapp/Signal-Android/issues/4715
   private boolean isTroublemaker() {
     return getCameraInfo().facing == CameraInfo.CAMERA_FACING_FRONT &&
            "JWR66Y".equals(Build.DISPLAY) &&

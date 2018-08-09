@@ -9,10 +9,9 @@ import org.thoughtcrime.securesms.database.Address;
 import org.thoughtcrime.securesms.database.DatabaseFactory;
 import org.thoughtcrime.securesms.database.MessagingDatabase.SyncMessageId;
 import org.thoughtcrime.securesms.database.RecipientDatabase;
+import org.thoughtcrime.securesms.jobmanager.JobManager;
+import org.thoughtcrime.securesms.jobmanager.JobParameters;
 import org.thoughtcrime.securesms.recipients.Recipient;
-import org.thoughtcrime.securesms.service.KeyCachingService;
-import org.whispersystems.jobqueue.JobManager;
-import org.whispersystems.jobqueue.JobParameters;
 import org.whispersystems.signalservice.api.messages.SignalServiceEnvelope;
 
 public abstract class PushReceivedJob extends ContextJob {
@@ -29,7 +28,7 @@ public abstract class PushReceivedJob extends ContextJob {
 
     if (!isActiveNumber(recipient)) {
       DatabaseFactory.getRecipientDatabase(context).setRegistered(recipient, RecipientDatabase.RegisteredState.REGISTERED);
-      ApplicationContext.getInstance(context).getJobManager().add(new DirectoryRefreshJob(context, KeyCachingService.getMasterSecret(context), recipient));
+      ApplicationContext.getInstance(context).getJobManager().add(new DirectoryRefreshJob(context, recipient, false));
     }
 
     if (envelope.isReceipt()) {
